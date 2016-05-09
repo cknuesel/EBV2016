@@ -219,8 +219,8 @@ void DetectRegions() {
 				if(bin[j] >= maxbin){
 					maxbin = bin[j];
 					binindex = j;
-					printf("bin(%d) %d \n",j, bin[j]);
-				} else {printf("test");}
+					//printf("bin(%d) %d \n",j, bin[j]);
+				}
 			}
 			DrawString(ImgRegions.objects[o].centroidX, ImgRegions.objects[o].centroidY, strlen(angleFinal[binindex]), LARGE, GREEN, angleFinal[binindex]);
 		}
