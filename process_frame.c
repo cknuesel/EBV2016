@@ -35,8 +35,12 @@ const int MinArea = 500;
 
 struct OSC_VIS_REGIONS ImgRegions;/* these contain the foreground objects */
 
+// partielle Ableitungen dx/dy Arrays
+int16 imgDx[IMG_SIZE];
+int16 imgDy[IMG_SIZE];
+
+
 void ChangeDetection();
-void SetBackground();
 void Erode_3x3(int InIndex, int OutIndex);
 void Dilate_3x3(int InIndex, int OutIndex);
 void DetectRegions();
@@ -44,7 +48,6 @@ void DrawBoundingBoxes();
 
 void ResetProcess()
 {
-	SetBackground();
 }
 
 
@@ -52,7 +55,6 @@ void ProcessFrame()
 {
 	//initialize counters
 	if(data.ipc.state.nStepCounter == 1) {
-		SetBackground();
 
 	} else {
 
@@ -71,53 +73,37 @@ void ChangeDetection() {
 	int r, c;
 	//set result buffer to zero
 	memset(data.u8TempImage[THRESHOLD], 0, IMG_SIZE);
-
 	//loop over the rows
 	for(r = Border*nc; r < (nr-Border)*nc; r += nc) {
 		//loop over the columns
 		for(c = Border; c < (nc-Border); c++) {
-			float pImg = data.u8TempImage[SENSORIMG][r+c];
-			float pBgr = bgrImg[r+c];
-			float Dif = fabs(pImg-pBgr);
-
-			//if the difference is larger than threshold value (can be changed on web interface)
-			if(Dif > data.ipc.state.nThreshold) {
-				//set pixel value to 255 in BACKGROUND image (only the blue plane)
+			unsigned char* p = &data.u8TempImage[SENSORIMG][r+c];
+			/* implement Sobel filter in x-direction */
+			int32 dx =
+					-(int32) *(p-nc-1) + (int32) *(p-nc+1)
+					-2* (int32) *(p-1) + 2* (int32) *(p+1)
+					-(int32) *(p+nc-1) + (int32) *(p+nc+1);
+			/* implement Sobel filter in y-direction */
+			int32 dy =
+					-(int32) *(p-nc-1) -2* (int32) *(p-nc) - (int32) *(p-nc+1)
+					+(int32) *(p+nc-1) +2* (int32) *(p+nc) + (int32) *(p+nc+1);
+			/* check if norm is larger than threshold */
+			int32 df2 = dx*dx+dy*dy;
+			int32 thr2 = data.ipc.state.nThreshold*data.ipc.state.nThreshold;
+			if(df2 > thr2) {//avoid square root
+				//set pixel value to 255 in THRESHOLD image for gui
 				data.u8TempImage[THRESHOLD][r+c] = 255;
-				//increase foreground counter
-				data.u8TempImage[INDEX1][r+c]++;
-				//check whether limit is reached
-				if(data.u8TempImage[INDEX1][r+c] == frgLimit) {
-					//set pixel to background
-					bgrImg[r+c] = (float) data.u8TempImage[SENSORIMG][r+c];
-					data.u8TempImage[INDEX1][r+c] = 0;
-				}
-			} else {
-				// update background image
-				bgrImg[r+c] = avgFac*bgrImg[r+c] + (1-avgFac)*(float) data.u8TempImage[SENSORIMG][r+c];
-				// set value for display
-				data.u8TempImage[BACKGROUND][r+c] = (unsigned char) bgrImg[r+c];
-				//set foreground counter to zero
-				data.u8TempImage[INDEX1][r+c] = 1;
 			}
+			//store derivatives (int16 is enough)
+			imgDx[r+c] = (int16) dx;
+			imgDy[r+c] = (int16) dy;
+			//possibility to visualize data
+			data.u8TempImage[BACKGROUND][r+c] = (uint8) MAX(0, MIN(255,128+dx));
 		}
 	}
 }
 
 
-void SetBackground() {
-	int r, c;
-
-	//loop over the rows
-	for(r = Border*nc; r < (nr-Border)*nc; r += nc) {
-		//loop over the columns
-		for(c = Border; c < (nc-Border); c++) {
-			bgrImg[r+c] = (float) data.u8TempImage[SENSORIMG][r+c];
-		}
-	}
-	//set all counters to zero
-	memset(data.u8TempImage[INDEX1], 0, IMG_SIZE);
-}
 
 
 void Erode_3x3(int InIndex, int OutIndex)
@@ -151,7 +137,19 @@ void Dilate_3x3(int InIndex, int OutIndex)
 
 void DetectRegions() {
 	struct OSC_PICTURE Pic;
-	int i;
+	int i,o;
+	uint16 c;
+
+	//binning
+	float pi = 3.14159;
+	float radGrad = 57.29578;
+	float threshold0Grad = 0.1;
+	float thresholdRad = threshold0Grad / radGrad;
+	float binning[4] = {22.5, 67.5, 112.5, 157.5};
+	float bin[4];
+	//shifted 90° because calculated vertically and display horizontally
+	char angleFinal[][4] = {"90 deg", "135 deg", "0 deg", "45 deg"};
+
 
 	//set pixel value to 1 in INDEX0 because the image MUST be binary (i.e. values of 0 and 1)
 	for(i = 0; i < IMG_SIZE; i++) {
@@ -167,6 +165,63 @@ void DetectRegions() {
 	//now do region labeling and feature extraction
 	OscVisLabelBinary( &Pic, &ImgRegions);
 	OscVisGetRegionProperties( &ImgRegions);
+
+	//loop over objects
+	for(o = 0; o < ImgRegions.noOfObjects; o++) {
+		int i;
+		for(i = 0; i < length(bin); i++) {
+			bin[i] = 0;
+		}
+
+		//only over regions that are > then minimum area
+		if(ImgRegions.objects[o].area > MinArea) {
+			//get pointer to root run of current object
+			struct OSC_VIS_REGIONS_RUN* currentRun = ImgRegions.objects[o].root;
+			//loop over runs of current object
+			do {
+				//loop over pixel of current run
+				for(c = currentRun->startColumn; c <= currentRun->endColumn; c++) {
+					int r = currentRun->row;
+					//processing for individual pixel at row r and column c
+					double angle = atan2(imgDy[r*nc+c], imgDx[r*nc+c]);
+					//make all angles positiv
+					if(angle < 0) {
+						angle += pi;
+					}
+					//filter all angles that are 0 or < threshold
+					if(angle < thresholdRad){
+						angle = 0;
+					} else {
+						angle *= radGrad;
+						//binning
+						if(angle < binning[0]){
+							bin[0]++;
+						} else if(angle < binning[1]){
+							bin[1]++;
+						} else if(angle < binning[2]){
+							bin[2]++;
+						} else if(angle < binning[3]){
+							bin[3]++;
+						} else {
+							bin[0]++;
+						}
+					}
+				}
+				currentRun = currentRun->next; //get net run of current object
+			} while(currentRun != NULL); //end of current object
+			//calculate the angle of the box
+			int j;
+			int binindex = 0;
+			int maxbin = 0;
+			for(j = 0; j < length(bin); j++){
+				if(bin[j] <= maxbin){
+					maxbin = bin[j];
+					binindex = j;
+				}
+			}
+			DrawString(ImgRegions.objects[o].centroidX, ImgRegions.objects[o].centroidY, strlen(angleFinal[][binindex]), LARGE, GREEN, & angleFinal[][binindex]);
+		}
+	}
 }
 
 
