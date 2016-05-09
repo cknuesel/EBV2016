@@ -146,9 +146,9 @@ void DetectRegions() {
 	float threshold0Grad = 0.1;
 	float thresholdRad = threshold0Grad / radGrad;
 	float binning[4] = {22.5, 67.5, 112.5, 157.5};
-	float bin[4];
+	uint16 bin[4];
 	//shifted 90° because calculated vertically and display horizontally
-	char angleFinal[][4] = {"90 deg", "135 deg", "0 deg", "45 deg"};
+	char* angleFinal[4] = {"90 deg ", "135 deg", "0 deg  ", "45 deg "};
 
 
 	//set pixel value to 1 in INDEX0 because the image MUST be binary (i.e. values of 0 and 1)
@@ -168,13 +168,12 @@ void DetectRegions() {
 
 	//loop over objects
 	for(o = 0; o < ImgRegions.noOfObjects; o++) {
-		int i;
-		for(i = 0; i < length(bin); i++) {
-			bin[i] = 0;
-		}
-
 		//only over regions that are > then minimum area
 		if(ImgRegions.objects[o].area > MinArea) {
+			int i;
+			for(i = 0; i < 4; i++) {
+				bin[i] = 0;
+			}
 			//get pointer to root run of current object
 			struct OSC_VIS_REGIONS_RUN* currentRun = ImgRegions.objects[o].root;
 			//loop over runs of current object
@@ -185,9 +184,10 @@ void DetectRegions() {
 					//processing for individual pixel at row r and column c
 					double angle = atan2(imgDy[r*nc+c], imgDx[r*nc+c]);
 					//make all angles positiv
+					//printf("angle: %f \n", angle);
 					if(angle < 0) {
 						angle += pi;
-					}
+					} //printf("angle+phi: %f \n", angle);
 					//filter all angles that are 0 or < threshold
 					if(angle < thresholdRad){
 						angle = 0;
@@ -206,20 +206,23 @@ void DetectRegions() {
 							bin[0]++;
 						}
 					}
+					//printf("calculated: %f \n", angle);
 				}
+
 				currentRun = currentRun->next; //get net run of current object
 			} while(currentRun != NULL); //end of current object
 			//calculate the angle of the box
 			int j;
 			int binindex = 0;
 			int maxbin = 0;
-			for(j = 0; j < length(bin); j++){
-				if(bin[j] <= maxbin){
+			for(j = 0; j < 4; j++){
+				if(bin[j] >= maxbin){
 					maxbin = bin[j];
 					binindex = j;
-				}
+					printf("bin(%d) %d \n",j, bin[j]);
+				} else {printf("test");}
 			}
-			DrawString(ImgRegions.objects[o].centroidX, ImgRegions.objects[o].centroidY, strlen(angleFinal[][binindex]), LARGE, GREEN, & angleFinal[][binindex]);
+			DrawString(ImgRegions.objects[o].centroidX, ImgRegions.objects[o].centroidY, strlen(angleFinal[binindex]), LARGE, GREEN, angleFinal[binindex]);
 		}
 	}
 }
